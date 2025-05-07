@@ -728,6 +728,8 @@ def main_application():
     When running this routine manually, you can remove this delay. If you change the file name of the routine to main.py, you need to add this delay when you want to start the routine automatically. Otherwise, you cannot see the information printed in poweron_print_once() below from the CDC interface.
     """
     utime.sleep(10)
+
+    print("HEHEHEHE HAHAHAHAHAHA")
     
     # Init working mode parameters
     working_mode = SettingWorkingMode()
