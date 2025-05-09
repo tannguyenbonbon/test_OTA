@@ -123,6 +123,8 @@ class Tracker:
                     self.__battery_info()
                 if data[1] == "working_mode_report":
                     self.__working_mode_report()
+                if data[1] == "device_info_report":
+                    self.__device_info_report()
 
             if data[0] == 1:
                 self.__server_option(data[1])
@@ -338,6 +340,18 @@ class Tracker:
 
         log.debug("battery_voltage %d|battery_energy %d|battery_charge_status %d" %(battery_voltage, battery_energy, battery_charge_status))
 
+    def __device_info_report(self):
+        user_cfg = self.__settings.read("user")
+        device_info = {
+            "app_current_version" : user_cfg["ota_status"]["app_current_version"],
+            "sys_current_version" : user_cfg["ota_status"]["sys_current_version"],
+        }
+
+        if self.__server.status:
+            res = self.__server.send_telemetry(device_info)
+
+        log.debug("Device Info: %s" % (str(device_info)))
+
     def __server_connect(self):
         if not self.__server.status:
             if self.__net_manager.net_status():
@@ -377,6 +391,8 @@ class Tracker:
         self.__server_conn_tag = 0
 
     def __public_startup_report(self):
+        # Report Device Info
+        self.device_info_report()
         # Report Working Mode
         self.working_mode_report()
         # Report Power reset reason
@@ -402,10 +418,12 @@ class Tracker:
 
             method = _msg.get("method", "")
             params = _msg.get("params", "")
-            shared_attrb = _msg.get('shared', None)
 
-            # print("Topic: {}".format(topic))
-            # print("Data: {}".format(data))
+            shared_attrb = _msg.get('shared', None)
+            ota_attrb = _msg.get('targetFwVer', None)
+
+            print("Topic: {}".format(topic))
+            print("Data: {}".format(data))
             # print("Method: {}".format(method))
             # print("Params: {}".format(params))
 
@@ -413,9 +431,34 @@ class Tracker:
             sys.print_exception(e)
             log.error(str(e))
         
-        if(shared_attrb != None):
+        if (shared_attrb != None):
             # log.debug("Shared Attribute Found : {}".format(shared_attrb))
             self.__server.process_shared_attributes(data)
+        elif (ota_attrb != None):
+            targetFWVer = _msg.get("targetFwVer", None)
+            targetFWUrl = _msg.get("targetFwUrl", None)
+
+            log.info("Found OTA Firmware Version : {}".format(targetFWVer))
+            log.info("Found OTA Firmware URL: {}".format(targetFWUrl))
+
+            #* Check OTA Type (Sys or App)
+            if targetFWVer.find("EC800M") != -1:
+                ota_type = "sys"
+            else:
+                ota_type = "app"
+
+            log.info("OTA Type: {}".format(ota_type))
+
+            if(ota_type == "sys"):
+                #* Start System OTA
+                # self.__server.start_sys_fota(targetFWVer, targetFWUrl)
+                pass
+            elif(ota_type == "app"):
+                #* Start Application OTA
+                self.__app_fota.start_app_fota(targetFWVer, targetFWUrl)
+            else:
+                pass
+    
 
         if method == "set_working_mode":
             response_data = self.__set_working_mode(params)
@@ -602,6 +645,8 @@ class Tracker:
             self.__settings = module
         elif isinstance(module, SettingWorkingMode):
             self.__working_mode = module
+        elif isinstance(module, AppFota):
+            self.__app_fota = module
         else:
             return False
         return True
@@ -674,6 +719,9 @@ class Tracker:
     def batt_report(self, args=None):
         self.__business_queue.put((0, "batt_report"))
 
+    def device_info_report(self, args=None):
+        self.__business_queue.put((0, "device_info_report"))
+
     def server_connect(self, args):
         if self.__server_conn_tag == 0:
             self.__server_conn_tag = 1
@@ -728,8 +776,6 @@ def main_application():
     When running this routine manually, you can remove this delay. If you change the file name of the routine to main.py, you need to add this delay when you want to start the routine automatically. Otherwise, you cannot see the information printed in poweron_print_once() below from the CDC interface.
     """
     utime.sleep(10)
-
-    print("HEHEHEHE HAHAHAHAHAHA")
     
     # Init working mode parameters
     working_mode = SettingWorkingMode()
@@ -776,6 +822,9 @@ def main_application():
     server_cfg = settings.read("server")
     server = TBDeviceMQTTClient(**server_cfg)
 
+    # Init Application FOTA
+    app_fota = AppFota()
+
     # Init tracker business modules.
     tracker = Tracker()
 
@@ -789,6 +838,7 @@ def main_application():
     tracker.add_module(gnss)
     tracker.add_module(cyc)
     tracker.add_module(working_mode)
+    tracker.add_module(app_fota)
     # tracker.add_module(cell)
     # tracker.add_module(wifi)
 
