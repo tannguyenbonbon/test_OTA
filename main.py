@@ -26,24 +26,27 @@ import utime
 import _thread
 import osTimer
 
-from misc       import Power
-from queue      import Queue
-from machine    import RTC
-from machine    import Timer
-import ujson    as json
+from misc                       import Power
+from queue                      import Queue
+from machine                    import RTC
+from machine                    import Timer
 
-from usr.working_mode    import SettingWorkingMode
-from usr.settings        import Settings
-from usr.settings_user   import UserConfig
-from usr.modules.battery import Battery
-from usr.modules.history import History
-from usr.modules.logging import getLogger
-from usr.sw_watchdog     import WatchDog
-from usr.watchdog        import WatchDogTimer
-from usr.modules.net_manage   import NetManager
-from usr.modules.thingsboard  import TBDeviceMQTTClient
-from usr.modules.power_manage import PowerManage, PMLock
-from usr.app_fota             import AppFota
+import ujson                    as json
+
+from usr.working_mode           import SettingWorkingMode
+from usr.settings               import Settings
+from usr.settings_user          import UserConfig
+from usr.modules.battery        import Battery
+from usr.modules.history        import History
+from usr.modules.logging        import getLogger
+from usr.sw_watchdog            import WatchDog
+from usr.watchdog               import WatchDogTimer
+from usr.modules.net_manage     import NetManager
+from usr.modules.thingsboard    import TBDeviceMQTTClient
+from usr.modules.power_manage   import PowerManage, PMLock
+from usr.app_fota               import AppFota
+
+from usr.tb_client              import thingsboard_client as server
 
 from usr.modules.location import (
     GNSS,
@@ -57,7 +60,7 @@ log = getLogger(__name__)
 
 class Tracker:
     def __init__(self):
-        self.__server       = None
+        server       = None
         self.__server_ota   = None
         self.__battery      = None
         self.__history      = None
@@ -170,7 +173,7 @@ class Tracker:
             #END BUG
 
         # Report history location.
-        if self.__server.status:
+        if server.status:
             self.__history_report()
 
         # Start report again timer.
@@ -179,15 +182,15 @@ class Tracker:
 
         #NOTE: GPS Will push at least 2 GPS point before timeout and go to sleep
         user_cfg = self.__working_mode.get_mode_config()
-        checkin_timer = int((user_cfg["loc_gps_read_timeout"] / 2) - 10)
+        checkin_timer = 30  # 30 seconds
         self.__gps_checkin_timer.start(checkin_timer * 1000, 0, self.loc_report)
 
     def __send_telemetry_or_save(self, properties):
         """Send telemetry to the server or save to history if the send fails."""
         try:
             res = False
-            if self.__server.status:
-                res = self.__server.send_telemetry(properties)
+            if server.status:
+                res = server.send_telemetry(properties)
 
             if not res:
                 log.debug("Failed to send telemetry, saving to history.")
@@ -203,7 +206,7 @@ class Tracker:
         his_datas = self.__history.read()
         if his_datas["data"]:
             for item in his_datas["data"]:
-                res = self.__server.send_telemetry(item)
+                res = server.send_telemetry(item)
                 if not res:
                     failed_datas.append(item)
         if failed_datas:
@@ -316,8 +319,8 @@ class Tracker:
             "power_batt": power_batt,
         }
 
-        if self.__server.status:
-            res = self.__server.send_telemetry(power_cycle_infomation)
+        if server.status:
+            res = server.send_telemetry(power_cycle_infomation)
 
         log.debug(
             "power_on_reason %d|power_dw_reason %d|power_batt %d"
@@ -335,8 +338,8 @@ class Tracker:
             "battery_charge_status" : battery_charge_status,
         }
 
-        if self.__server.status:
-            res = self.__server.send_telemetry(battery_information)
+        if server.status:
+            res = server.send_telemetry(battery_information)
 
         log.debug("battery_voltage %d|battery_energy %d|battery_charge_status %d" %(battery_voltage, battery_energy, battery_charge_status))
 
@@ -347,18 +350,18 @@ class Tracker:
             "sys_current_version" : user_cfg["ota_status"]["sys_current_version"],
         }
 
-        if self.__server.status:
-            res = self.__server.send_telemetry(device_info)
+        if server.status:
+            res = server.send_telemetry(device_info)
 
         log.debug("Device Info: %s" % (str(device_info)))
 
     def __server_connect(self):
-        if not self.__server.status:
+        if not server.status:
             if self.__net_manager.net_status():
                 log.debug("Start server connect\n")
-                self.__server.disconnect()
-                self.__server.connect()
-            if not self.__server.status:
+                server.disconnect()
+                server.connect()
+            if not server.status:
                 log.debug("Start __server_reconn_timer")
                 self.__server_reconn_timer.stop()
                 self.__server_reconn_timer.start(30 * 1000, 0, self.server_connect)
@@ -373,7 +376,7 @@ class Tracker:
                 self.__business_timer.start(user_cfg["loc_gps_read_timeout"] * 1000, 0, self.into_sleep)
 
                 #Request Shared Attribute to update Working mode
-                res = self.__server.send_shared_attributes_request(keys = "working_mode_attrb")
+                res = server.send_shared_attributes_request(keys = "working_mode_attrb")
                 if res == True:
                     log.debug("Send shared attribute request success!")
                 else:
@@ -403,7 +406,7 @@ class Tracker:
     def __server_disconnect(self):
         if self.__server_disconn_tag == 0:
             self.__server_disconn_tag = 1
-            ret_disconn = self.__server.disconnect()
+            ret_disconn = server.disconnect()
             log.debug("__server_disconnect %d" % (ret_disconn))
 
     def __server_option(self, args):
@@ -422,8 +425,8 @@ class Tracker:
             shared_attrb = _msg.get('shared', None)
             ota_attrb = _msg.get('targetFwVer', None)
 
-            print("Topic: {}".format(topic))
-            print("Data: {}".format(data))
+            # print("Topic: {}".format(topic))
+            # print("Data: {}".format(data))
             # print("Method: {}".format(method))
             # print("Params: {}".format(params))
 
@@ -433,7 +436,7 @@ class Tracker:
         
         if (shared_attrb != None):
             # log.debug("Shared Attribute Found : {}".format(shared_attrb))
-            self.__server.process_shared_attributes(data)
+            server.process_shared_attributes(data)
         elif (ota_attrb != None):
             targetFWVer = _msg.get("targetFwVer", None)
             targetFWUrl = _msg.get("targetFwUrl", None)
@@ -451,7 +454,7 @@ class Tracker:
 
             if(ota_type == "sys"):
                 #* Start System OTA
-                # self.__server.start_sys_fota(targetFWVer, targetFWUrl)
+                # server.start_sys_fota(targetFWVer, targetFWUrl)
                 pass
             elif(ota_type == "app"):
                 #* Start Application OTA
@@ -469,8 +472,8 @@ class Tracker:
             self.__process_control_method(params)
 
         #NOTE: Process RPC Response
-        if self.__server.status and response_data:
-            res = self.__server.__mqtt.publish(response_topic, json.dumps(response_data))
+        if server.status and response_data:
+            res = server.__mqtt.publish(response_topic, json.dumps(response_data))
 
     def __working_mode_report(self, args=None):
         mode = self.__working_mode.read("Working_Mode")
@@ -492,8 +495,8 @@ class Tracker:
             "wakeup_timer": int(wakeup_time_mins),
         }
 
-        if self.__server.status:
-            res = self.__server.send_telemetry(working_mode_params)
+        if server.status:
+            res = server.send_telemetry(working_mode_params)
 
     def __process_control_method(self, args):
         data = args
@@ -536,6 +539,9 @@ class Tracker:
         self.__business_wdg_timer.stop()
         self.__business_wdg_timer.start(usr_cfg_wdg_timer * 1000, 0, self.__power_restart)
 
+        #Feed Software WatchDog Timer
+        self.__sw_wdg.feed()
+
         #Reset Hardware WatchDog Timer
         usr_cfg_hw_wdg_timer = (usr_cfg["work_cycle_period"]) + 60
         hw_watchdog.reset(usr_cfg_hw_wdg_timer)
@@ -554,8 +560,8 @@ class Tracker:
             "wakeup_time_mins" : wakeup_time_mins,
         }
 
-        if self.__server.status:
-            res = self.__server.send_telemetry(sleep_status)
+        if server.status:
+            res = server.send_telemetry(sleep_status)
         #End Push
 
         self.__business_timer.stop()
@@ -624,7 +630,7 @@ class Tracker:
 
     def add_module(self, module):
         if isinstance(module, TBDeviceMQTTClient):
-            self.__server = module
+            server = module
         elif isinstance(module, PowerManage):
             self.__pm = module
         elif isinstance(module, Battery):
@@ -692,13 +698,13 @@ class Tracker:
         if args[1] == 0:
             if self.__server_disconn_tag != 0:
                 # is it necessary? due to umqtt have reconnect mechanism already
-                # self.__server.disconnect()
+                # server.disconnect()
                 # self.__server_reconn_timer.stop()
                 # log.debug("Due to NW unexpected disconnect, we need re-establish connection to the NW? to the server")
                 # log.debug("Start __server_reconn_timer")
                 # self.__server_reconn_timer.start(30 * 1000, 0, self.server_connect)
                 # else:
-                self.__server.close()
+                server.close()
                 # self.__server_disconn_tag = 0
                 log.debug("Explicitly disconnect server by the user")
         else:
@@ -763,11 +769,11 @@ class Tracker:
         #Reset Timer to update new mode params
         self.__reset_timer()
 
-        #NOTE: Update Working Mode Telemetry
+        #Update Working Mode Telemetry
         self.working_mode_report()
 
         #NOTE: Return RPC Response
-        if self.__server.status:
+        if server.status:
             return response_data
 
 
@@ -819,8 +825,8 @@ def main_application():
     cyc = CoordinateSystemConvert()
 
     # Init server modules.
-    server_cfg = settings.read("server")
-    server = TBDeviceMQTTClient(**server_cfg)
+    # server_cfg = settings.read("server")
+    # server = TBDeviceMQTTClient(**server_cfg)
 
     # Init Application FOTA
     app_fota = AppFota()
