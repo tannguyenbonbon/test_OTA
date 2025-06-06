@@ -457,7 +457,6 @@ class GNSSInternal(GNSSBase):
 
     def __init__(self):
         super().__init__()
-        log.debug("QuecGNSS NEW VERSION")
         assert quecgnss is not None, "quecgnss is not supported."
         if quecgnss.init() != 0:
             raise RuntimeError("quecgnss init failed")
